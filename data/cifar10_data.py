@@ -74,6 +74,7 @@ class DataLoader(object):
             os.makedirs(data_dir)
 
         # load CIFAR-10 training data to RAM
+        print('Loading cifar 10 to RAM')
         self.data, self.labels = load(os.path.join(data_dir,'cifar-10-python'), subset=subset)
         self.data = np.transpose(self.data, (0,2,3,1)) # (N,3,32,32) -> (N,32,32,3)
         

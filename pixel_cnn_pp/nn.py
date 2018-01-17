@@ -184,10 +184,12 @@ def dense(x, num_units, nonlinearity=None, init_scale=1., counters={}, init=Fals
             x_init = tf.matmul(x, V_norm)
             m_init, v_init = tf.nn.moments(x_init, [0])
             scale_init = init_scale / tf.sqrt(v_init + 1e-10)
-            g = tf.get_variable('g', dtype=tf.float32,
-                                initializer=scale_init, trainable=True)
-            b = tf.get_variable('b', dtype=tf.float32,
-                                initializer=-m_init * scale_init, trainable=True)
+            g = tf.get_variable('g', scale_init.shape.as_list(), 
+                                dtype=tf.float32, trainable=True)
+            g = tf.assign(g, scale_init)
+            b = tf.get_variable('b', m_init.shape.as_list(),
+                                dtype=tf.float32, trainable=True)
+            b = tf.assign(b, -m_init * scale_init)
             x_init = tf.reshape(
                 scale_init, [1, num_units]) * (x_init - tf.reshape(m_init, [1, num_units]))
             if nonlinearity is not None:
@@ -223,10 +225,12 @@ def conv2d(x, num_filters, filter_size=[3, 3], stride=[1, 1], pad='SAME', nonlin
             x_init = tf.nn.conv2d(x, V_norm, [1] + stride + [1], pad)
             m_init, v_init = tf.nn.moments(x_init, [0, 1, 2])
             scale_init = init_scale / tf.sqrt(v_init + 1e-8)
-            g = tf.get_variable('g', dtype=tf.float32,
-                                initializer=scale_init, trainable=True)
-            b = tf.get_variable('b', dtype=tf.float32,
-                                initializer=-m_init * scale_init, trainable=True)
+            g = tf.get_variable('g', scale_init.shape.as_list(),
+                                dtype=tf.float32,trainable=True)
+            g = tf.assign(g, scale_init)
+            b = tf.get_variable('b', m_init.shape.as_list(),
+                                dtype=tf.float32, trainable=True)
+            b = tf.assign(b, -m_init * scale_init)
             x_init = tf.reshape(scale_init, [
                                 1, 1, 1, num_filters]) * (x_init - tf.reshape(m_init, [1, 1, 1, num_filters]))
             if nonlinearity is not None:
@@ -271,10 +275,12 @@ def deconv2d(x, num_filters, filter_size=[3, 3], stride=[1, 1], pad='SAME', nonl
                                             1] + stride + [1], padding=pad)
             m_init, v_init = tf.nn.moments(x_init, [0, 1, 2])
             scale_init = init_scale / tf.sqrt(v_init + 1e-8)
-            g = tf.get_variable('g', dtype=tf.float32,
-                                initializer=scale_init, trainable=True)
-            b = tf.get_variable('b', dtype=tf.float32,
-                                initializer=-m_init * scale_init, trainable=True)
+            g = tf.get_variable('g', scale_init.shape.as_list(),
+                        dtype=tf.float32, trainable=True)
+            g = tf.assign(g, scale_init)
+            b = tf.get_variable('b', m_init.shape.as_list(),
+                        dtype=tf.float32, trainable=True)
+            b = tf.assign(b, -m_init * scale_init)
             x_init = tf.reshape(scale_init, [
                                 1, 1, 1, num_filters]) * (x_init - tf.reshape(m_init, [1, 1, 1, num_filters]))
             if nonlinearity is not None:

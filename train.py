@@ -80,12 +80,17 @@ if args.data_set == 'imagenet' and args.class_conditional:
     raise("We currently don't have labels for the small imagenet data set")
 DataLoader = {'cifar': cifar10_data.DataLoader,
               'imagenet': imagenet_data.DataLoader}[args.data_set]
+#import ipdb
+#ipdb.set_trace()
+print("batch size = {}".format(args.batch_size))
 train_data = DataLoader(args.data_dir, 'train', args.batch_size * args.nr_gpu,
                         rng=rng, shuffle=True, return_labels=args.class_conditional)
-test_data = DataLoader(args.data_dir, 'test', args.batch_size *
-                       args.nr_gpu, shuffle=False, return_labels=args.class_conditional)
+#test_data = DataLoader(args.data_dir, 'test', args.batch_size *
+#                       args.nr_gpu, shuffle=False, return_labels=args.class_conditional)
 obs_shape = train_data.get_observation_size()  # e.g. a tuple (32,32,3)
 assert len(obs_shape) == 3, 'assumed right now'
+#import ipdb
+#ipdb.set_trace()
 
 # data place holders
 x_init = tf.placeholder(tf.float32, shape=(args.init_batch_size,) + obs_shape)
@@ -116,7 +121,7 @@ model_opt = {'nr_resnet': args.nr_resnet, 'nr_filters': args.nr_filters,
 model = tf.make_template('model', model_spec)
 
 # run once for data dependent initialization of parameters
-gen_par = model(x_init, h_init, init=True,
+init_pass = model(x_init, h_init, init=True,
                 dropout_p=args.dropout_p, **model_opt)
 
 # keep track of moving average
@@ -127,7 +132,7 @@ maintain_averages_op = tf.group(ema.apply(all_params))
 # get loss gradients over multiple GPUs
 grads = []
 loss_gen = []
-loss_gen_test = []
+#loss_gen_test = []
 for i in range(args.nr_gpu):
     with tf.device('/gpu:%d' % i):
         # train
@@ -137,16 +142,16 @@ for i in range(args.nr_gpu):
         # gradients
         grads.append(tf.gradients(loss_gen[i], all_params))
         # test
-        gen_par = model(xs[i], hs[i], ema=ema, dropout_p=0., **model_opt)
-        loss_gen_test.append(nn.discretized_mix_logistic_loss(xs[i], gen_par))
+        #gen_par = model(xs[i], hs[i], ema=ema, dropout_p=0., **model_opt)
+        #loss_gen_test.append(nn.discretized_mix_logistic_loss(xs[i], gen_par))
 
 # add losses and gradients together and get training updates
 tf_lr = tf.placeholder(tf.float32, shape=[])
 with tf.device('/gpu:0'):
     for i in range(1, args.nr_gpu):
         loss_gen[0] += loss_gen[i]
-        loss_gen_test[0] += loss_gen_test[i]
-        for j in range(len(grads[0])):
+        #loss_gen_test[0] += loss_gen_test[i]
+        for j in range(len(grads[0])):   # iterate over the batch ?
             grads[0][j] += grads[i][j]
     # training op
     optimizer = tf.group(nn.adam_updates(
@@ -155,8 +160,14 @@ with tf.device('/gpu:0'):
 # convert loss to bits/dim
 bits_per_dim = loss_gen[
     0] / (args.nr_gpu * np.log(2.) * np.prod(obs_shape) * args.batch_size)
-bits_per_dim_test = loss_gen_test[
-    0] / (args.nr_gpu * np.log(2.) * np.prod(obs_shape) * args.batch_size)
+#bits_per_dim_test = loss_gen_test[
+#    0] / (args.nr_gpu * np.log(2.) * np.prod(obs_shape) * args.batch_size)
+
+print('Adding sparsity collection ops to graph')
+# TODO: Commented out for now
+with tf.name_scope("training_stats"):
+    from zoo.utils.characterize import collect_sparsity_stats
+    collect_sparsity_stats()
 
 # sample from the model
 new_x_gen = []
@@ -181,6 +192,8 @@ def sample_from_model(sess):
 # init & save
 initializer = tf.global_variables_initializer()
 saver = tf.train.Saver()
+
+print('initialized and Saver created')
 
 # turn numpy inputs into feed_dict for use with tensorflow
 
@@ -209,9 +222,13 @@ def make_feed_dict(data, init=False):
 if not os.path.exists(args.save_dir):
     os.makedirs(args.save_dir)
 print('starting training')
-test_bpd = []
+#test_bpd = []
 lr = args.learning_rate
 with tf.Session() as sess:
+
+    merged = tf.summary.merge_all()
+    train_summary_writer = tf.summary.FileWriter('/cb/data/herman/github4763/pxpp/save/', sess.graph)
+
     for epoch in range(args.max_epochs):
         begin = time.time()
 
@@ -222,36 +239,58 @@ with tf.Session() as sess:
                 train_data.next(args.init_batch_size), init=True)
             train_data.reset()  # rewind the iterator back to 0 to do one full epoch
             sess.run(initializer, feed_dict)
+            sess.run(init_pass, feed_dict)
             print('initializing the model...')
             if args.load_params:
+                print("******LOADING SAVED MODEL******")
                 ckpt_file = args.save_dir + '/params_' + args.data_set + '.ckpt'
+                #import ipdb
+                #ipdb.set_trace()
                 print('restoring parameters from', ckpt_file)
                 saver.restore(sess, ckpt_file)
 
+        #w = tf.summary.FileWriter('/cb/data/herman/tmp/pxpp/save/', sess.graph_def)
+        #tf.train.write_graph(sess.graph_def, '/cb/data/herman/github4763/pxpp/save/', 'graph.pb', as_text=False)
+        #w.close()
         # train for one epoch
         train_losses = []
+        i = 0
         for d in train_data:
+            i += 1
+            #print ("i = {}".format(i))
             feed_dict = make_feed_dict(d)
             # forward/backward/update model on each gpu
             lr *= args.lr_decay
             feed_dict.update({tf_lr: lr})
-            l, _ = sess.run([bits_per_dim, optimizer], feed_dict)
+            tf.summary.scalar('loss', bits_per_dim)
+            s, l, _ = sess.run([merged, bits_per_dim, optimizer], feed_dict)
             train_losses.append(l)
+            train_summary_writer.add_summary(s, epoch)
+            break
         train_loss_gen = np.mean(train_losses)
+        print("train loss generated")
 
         # compute likelihood over test data
-        test_losses = []
-        for d in test_data:
-            feed_dict = make_feed_dict(d)
-            l = sess.run(bits_per_dim_test, feed_dict)
-            test_losses.append(l)
-        test_loss_gen = np.mean(test_losses)
-        test_bpd.append(test_loss_gen)
+        #test_losses = []
+        #i = 0 
+        #for d in test_data:
+        #    i += 1
+        #    #print("Test data i = {}".format(i))
+        #    feed_dict = make_feed_dict(d)
+        #    l = sess.run(bits_per_dim_test, feed_dict)
+        #    test_losses.append(l)
+        #    break
+        #test_loss_gen = np.mean(test_losses)
+        #test_bpd.append(test_loss_gen)
+        #print("test loss generated")
 
         # log progress to console
-        print("Iteration %d, time = %ds, train bits_per_dim = %.4f, test bits_per_dim = %.4f" % (
-            epoch, time.time() - begin, train_loss_gen, test_loss_gen))
+        #print("Iteration %d, time = %ds, train bits_per_dim = %.4f, test bits_per_dim = %.4f" % (
+        #    epoch, time.time() - begin, train_loss_gen, test_loss_gen))
+        print("Iteration %d, time = %ds, train bits_per_dim = %.4f." % (
+            epoch, time.time() - begin, train_loss_gen))
         sys.stdout.flush()
+
 
         if epoch % args.save_interval == 0:
 
@@ -267,5 +306,5 @@ with tf.Session() as sess:
             # save params
             saver.save(sess, args.save_dir + '/params_' +
                        args.data_set + '.ckpt')
-            np.savez(args.save_dir + '/test_bpd_' + args.data_set +
-                     '.npz', test_bpd=np.array(test_bpd))
+            #np.savez(args.save_dir + '/test_bpd_' + args.data_set +
+            #         '.npz', test_bpd=np.array(test_bpd))
